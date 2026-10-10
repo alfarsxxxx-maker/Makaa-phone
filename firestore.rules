@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for Shop Isolation and RBAC (Mekka Phone V4)
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isShopMember(shopId) {
+      return isAuthenticated() && (
+        request.auth.token.shopId == shopId ||
+        request.auth.uid == shopId
+      );
+    }
+
+    function isShopOwner(shopId) {
+      return isShopMember(shopId) && request.auth.token.role == 'OWNER';
+    }
+
+    // Shop root document
+    match /shops/{shopId} {
+      allow read: if isShopMember(shopId);
+      allow write: if isShopOwner(shopId);
+
+      // Financial Ledger: STRICTLY IMMUTABLE (Requirements 8 & 50)
+      // New transactions may be inserted, but never updated or deleted!
+      match /financial_transactions/{txId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update, delete: if false;
+      }
+
+      match /transaction_lines/{lineId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update, delete: if false;
+      }
+
+      // Inventory Movements: STRICTLY IMMUTABLE (Requirements 2 & 50)
+      match /inventory_movements/{movId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update, delete: if false;
+      }
+
+      // Audit Logs: STRICTLY IMMUTABLE (Requirement 50)
+      match /audit_logs/{logId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update, delete: if false;
+      }
+
+      // Catalog & Operational collections: Isolated per shop
+      match /products/{productId} {
+        allow read: if isShopMember(shopId);
+        allow write: if isShopMember(shopId);
+      }
+
+      match /serial_numbers/{serialId} {
+        allow read: if isShopMember(shopId);
+        allow write: if isShopMember(shopId);
+      }
+
+      match /customers/{customerId} {
+        allow read: if isShopMember(shopId);
+        allow write: if isShopMember(shopId);
+      }
+
+      match /suppliers/{supplierId} {
+        allow read: if isShopMember(shopId);
+        allow write: if isShopMember(shopId);
+      }
+
+      match /sales/{saleId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update: if isShopMember(shopId);
+        allow delete: if false;
+      }
+
+      match /purchases/{purchaseId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update: if isShopMember(shopId);
+        allow delete: if false;
+      }
+
+      match /maintenance_orders/{orderId} {
+        allow read: if isShopMember(shopId);
+        allow write: if isShopMember(shopId);
+      }
+
+      match /wallets/{walletId} {
+        allow read: if isShopMember(shopId);
+        allow write: if isShopMember(shopId);
+      }
+
+      match /transfers/{transferId} {
+        allow read: if isShopMember(shopId);
+        allow create: if isShopMember(shopId);
+        allow update, delete: if false;
+      }
+
+      match /sync_conflicts/{conflictId} {
+        allow read, write: if isShopMember(shopId);
+      }
+
+      match /backups/{backupId} {
+        allow read, write: if isShopOwner(shopId);
+      }
+    }
+  }
+}

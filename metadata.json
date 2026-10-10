@@ -1,0 +1,6 @@
+{
+  "name": "مكة فون",
+  "description": "نظام تشغيل وإدارة متكامل لمحلات الهواتف والخدمات الإلكترونية والمحافظ والخزينة والمخزون",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,26 @@
+<resources>
+    <string name="app_name">مكة فون</string>
+    <string name="control_center_title">مركز تحكم مكة فون</string>
+    <string name="nav_control_center">مركز التحكم</string>
+    <string name="nav_customers">العملاء</string>
+    <string name="nav_products">البضاعة</string>
+    <string name="nav_sales">المبيعات</string>
+    <string name="nav_purchases">المشتريات</string>
+    <string name="nav_maintenance">الصيانة</string>
+    <string name="nav_wallets">المحافظ</string>
+    <string name="nav_cash_drawer">الخزينة</string>
+    <string name="nav_expenses">المصروفات</string>
+    <string name="nav_operations">العمليات</string>
+    <string name="nav_reports">التقارير</string>
+    <string name="nav_settings">الإعدادات</string>
+    <string name="kpi_today_sales">مبيعات اليوم</string>
+    <string name="kpi_today_expenses">مصروفات اليوم</string>
+    <string name="kpi_cash_position">رصيد الخزينة الفعلي</string>
+    <string name="kpi_wallet_balances">إجمالي المحافظ الإلكترونية</string>
+    <string name="kpi_low_stock">نواقص البضاعة</string>
+    <string name="kpi_pending_repairs">صيانة قيد التنفيذ</string>
+    <string name="kpi_pending_sync">عمليات بانتظار المزامنة</string>
+    <string name="kpi_unresolved_conflicts">تعارضات مالية للمراجعة</string>
+    <string name="empty_ledger_state">لا توجد قيود مالية مسجلة بعد — الأرصدة تُشتق حصرياً من دفتر الأستاذ غير القابل للتعديل</string>
+    <string name="currency_egp">ج.م</string>
+</resources>
