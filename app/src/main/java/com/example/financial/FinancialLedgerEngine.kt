@@ -1738,7 +1738,8 @@ class FinancialLedgerEngine(
     suspend fun executeAtomicWalletTransfer(
         shopId: String,
         walletId: String,
-        cashDrawerId: String,
+        cashDrawerId: String = "DRAWER-MAIN-EGP",
+        targetWalletId: String? = null,
         transferKind: String, // WALLET_SEND, WALLET_RECEIVE, WALLET_TOPUP, WALLET_TO_CASH, CASH_TO_WALLET
         customerPhone: String,
         principalAmountMinor: Long,
@@ -1776,18 +1777,46 @@ class FinancialLedgerEngine(
                 if (wallet.shopId != shopId) {
                     throw AtomicRollbackException(AppResult.Error("المحفظة لا تنتمي للمتجر الحالي", "TENANT_MISMATCH"))
                 }
+                if (!wallet.isActive || wallet.operationalStatus != "ACTIVE") {
+                    throw AtomicRollbackException(
+                        AppResult.Error(
+                            "المحفظة الإلكترونية معلقة أو غير نشطة (${wallet.operationalStatus}) ولا يمكن إجراء عمليات عليها",
+                            "WALLET_INACTIVE_OR_SUSPENDED"
+                        )
+                    )
+                }
 
-                val rawOpType = WalletOperationType.fromCodeOrNull(transferKind) ?: WalletOperationType.CUSTOMER_DEPOSIT
-                val opType = if (rawOpType == WalletOperationType.WALLET_TRANSFER &&
-                    (cashDrawerId == "DRAWER-MAIN-EGP" || cashDrawerId == "MAIN_DRAWER" || ledgerDao.getCashDrawerById(cashDrawerId) != null)) {
-                    val walletBalance = ledgerDao.getDerivedAccountBalanceMinor(shopId, FinancialAccountType.WALLET, walletId)
-                    if (walletBalance < principalAmountMinor + providerFeeMinor) {
-                        WalletOperationType.CASH_TO_WALLET
-                    } else {
-                        WalletOperationType.WALLET_TO_CASH
+                val opType = WalletOperationType.fromCodeOrNull(transferKind) ?: WalletOperationType.CUSTOMER_DEPOSIT
+
+                val effectiveTargetWalletId = if (opType == WalletOperationType.WALLET_TRANSFER) {
+                    val candidateTarget = (targetWalletId ?: cashDrawerId).trim()
+                    if (candidateTarget.isBlank() || candidateTarget == walletId) {
+                        throw AtomicRollbackException(
+                            AppResult.Error("تحويل بين المحافظ يتطلب تحديد محفظة مستلمة صالحة ومختلفة عن محفظة الإرسال", "INVALID_TARGET_WALLET")
+                        )
                     }
-                } else {
-                    rawOpType
+                    val targetWallet = ledgerDao.getWalletById(candidateTarget)
+                        ?: throw AtomicRollbackException(AppResult.Error("محفظة الاستلام غير موجودة ($candidateTarget)", "TARGET_WALLET_NOT_FOUND"))
+                    if (targetWallet.shopId != shopId) {
+                        throw AtomicRollbackException(AppResult.Error("محفظة الاستلام لا تنتمي للمتجر الحالي", "TARGET_WALLET_TENANT_MISMATCH"))
+                    }
+                    if (!targetWallet.isActive || targetWallet.operationalStatus != "ACTIVE") {
+                        throw AtomicRollbackException(
+                            AppResult.Error(
+                                "محفظة الاستلام معلقة أو غير نشطة (${targetWallet.operationalStatus}) ولا يمكن استلام تحويل عليها",
+                                "TARGET_WALLET_INACTIVE_OR_SUSPENDED"
+                            )
+                        )
+                    }
+                    candidateTarget
+                } else null
+
+                if (opType != WalletOperationType.WALLET_TRANSFER && opType != WalletOperationType.WALLET_ADJUSTMENT) {
+                    val drawer = ledgerDao.getCashDrawerById(cashDrawerId)
+                        ?: throw AtomicRollbackException(AppResult.Error("درج النقدية المحدد غير موجود ($cashDrawerId)", "CASH_DRAWER_NOT_FOUND"))
+                    if (drawer.shopId != shopId) {
+                        throw AtomicRollbackException(AppResult.Error("درج النقدية لا ينتمي للمتجر الحالي", "DRAWER_TENANT_MISMATCH"))
+                    }
                 }
 
                 if (opType == WalletOperationType.CUSTOMER_DEPOSIT || opType == WalletOperationType.WALLET_TO_CASH || opType == WalletOperationType.WALLET_TRANSFER) {
@@ -1947,7 +1976,7 @@ class FinancialLedgerEngine(
                             sourceAccountType = FinancialAccountType.WALLET,
                             sourceAccountId = walletId,
                             destinationAccountType = FinancialAccountType.WALLET,
-                            destinationAccountId = cashDrawerId, // Target wallet ID passed in secondary slot
+                            destinationAccountId = effectiveTargetWalletId ?: cashDrawerId, // Explicit target wallet ID
                             relatedEntityType = "TRANSFER",
                             relatedEntityId = transferId,
                             descriptionArabic = "تحويل داخلي بين المحافظ — مرجع $refNumber",

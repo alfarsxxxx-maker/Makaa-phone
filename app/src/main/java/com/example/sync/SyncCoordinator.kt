@@ -309,6 +309,7 @@ class SyncCoordinator(
         var syncedCount = 0
         var retryingCount = 0
         var failedCount = 0
+        var conflictCount = 0
         var idempotentSkippedCount = 0
 
         for (op in pendingList) {
@@ -384,18 +385,51 @@ class SyncCoordinator(
                     }
                 }
                 is AppResult.Error -> {
-                    val nextRetry = op.retryCount + 1
-                    val nextState = if (nextRetry >= MAX_RETRY_ATTEMPTS) SyncState.FAILED else SyncState.RETRYING
-                    systemIntegrityDao.updateSyncOperation(
-                        op.copy(
-                            syncState = nextState,
-                            retryCount = nextRetry,
-                            lastErrorMessage = remoteResult.message,
-                            updatedAt = timestamp,
-                            lastAttemptAt = timestamp
+                    val isConflict = remoteResult.code == "CLOUD_HTTP_ERROR_409" ||
+                        remoteResult.code == "SYNC_CONFLICT" ||
+                        remoteResult.message.contains("تعارض") ||
+                        remoteResult.message.contains("Conflict", ignoreCase = true)
+
+                    if (isConflict) {
+                        systemIntegrityDao.updateSyncOperation(
+                            op.copy(
+                                syncState = SyncState.CONFLICT,
+                                lastErrorMessage = remoteResult.message,
+                                updatedAt = timestamp,
+                                lastAttemptAt = timestamp
+                            )
                         )
-                    )
-                    if (nextState == SyncState.FAILED) failedCount++ else retryingCount++
+                        evaluateConflictPolicy(
+                            shopId = op.shopId,
+                            entityType = op.entityType,
+                            entityLocalId = op.entityLocalId,
+                            isFinancialRecord = op.isFinancialLedgerRecord,
+                            localVersion = op.entityVersion,
+                            remoteVersion = op.entityVersion + 1L,
+                            localSnapshotJson = op.payloadJson,
+                            remoteSnapshotJson = """{"conflictSource":"CLOUD_HTTP_409","message":"${remoteResult.message}"}""",
+                            deviceId = op.deviceId,
+                            timestamp = timestamp
+                        )
+                        conflictCount++
+                    } else {
+                        val isFatalAuth = remoteResult.code == "CLOUD_HTTP_ERROR_401" ||
+                            remoteResult.code == "SERVER_SHOP_ISOLATION_DENIED" ||
+                            remoteResult.code == "SHOP_ISOLATION_VIOLATION"
+
+                        val nextRetry = op.retryCount + 1
+                        val nextState = if (isFatalAuth || nextRetry >= MAX_RETRY_ATTEMPTS) SyncState.FAILED else SyncState.RETRYING
+                        systemIntegrityDao.updateSyncOperation(
+                            op.copy(
+                                syncState = nextState,
+                                retryCount = nextRetry,
+                                lastErrorMessage = remoteResult.message,
+                                updatedAt = timestamp,
+                                lastAttemptAt = timestamp
+                            )
+                        )
+                        if (nextState == SyncState.FAILED) failedCount++ else retryingCount++
+                    }
                 }
             }
         }
@@ -406,7 +440,7 @@ class SyncCoordinator(
                 syncedCount = syncedCount,
                 retryingCount = retryingCount,
                 failedCount = failedCount,
-                conflictCount = 0,
+                conflictCount = conflictCount,
                 idempotentSkippedCount = idempotentSkippedCount,
                 lastSyncedAtMillis = if (syncedCount > 0 || pendingList.isEmpty()) timestamp else null
             )

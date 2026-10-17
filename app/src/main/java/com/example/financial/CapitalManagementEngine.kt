@@ -111,6 +111,42 @@ class CapitalManagementEngine(
     }
 
     /**
+     * Authoritatively records the initial opening capital contribution into the shop's liquid assets.
+     * Debit: Cash Drawer or Wallet (Asset increases)
+     * Credit: Owner's Equity & Capital (Equity increases)
+     */
+    suspend fun recordOpeningCapital(
+        shopId: String,
+        amountMinor: Long,
+        destinationAccountType: FinancialAccountType = FinancialAccountType.CASH_DRAWER,
+        destinationAccountId: String = com.example.repository.MekkaPhoneRepository.DEFAULT_MAIN_DRAWER_ID,
+        notes: String = "رأس مال افتتاحي",
+        actorUserId: String,
+        deviceId: String,
+        timestamp: Long = System.currentTimeMillis()
+    ): AppResult<TransactionEntity> {
+        if (amountMinor <= 0L) {
+            return AppResult.Error("مبلغ رأس المال الافتتاحي يجب أن يكون أكبر من الصفر", "INVALID_AMOUNT")
+        }
+        val desc = "رأس مال افتتاحي: ${Money.ofMinor(amountMinor).formatArabic()}${if (notes.isNotBlank()) " — $notes" else ""}"
+        return financialLedgerEngine.postLedgerTransactionInternal(
+            shopId = shopId,
+            transactionType = FinancialTransactionType.CASH_IN,
+            amountMinor = amountMinor,
+            sourceAccountType = FinancialAccountType.EQUITY_OPENING_OR_ADJUSTMENT,
+            sourceAccountId = AccountingEngine.ACC_OWNER_EQUITY,
+            destinationAccountType = destinationAccountType,
+            destinationAccountId = destinationAccountId,
+            relatedEntityType = "OPENING_CAPITAL",
+            relatedEntityId = destinationAccountId,
+            descriptionArabic = desc,
+            createdByUserId = actorUserId,
+            deviceId = deviceId,
+            timestamp = timestamp
+        )
+    }
+
+    /**
      * Generates a fully reconciled, authoritative Capital Statement directly from the Double-Entry Ledger.
      */
     suspend fun getCapitalStatement(shopId: String): CapitalStatement {
@@ -126,16 +162,25 @@ class CapitalManagementEngine(
 
         for (tx in allTx) {
             when {
+                tx.relatedEntityType == "OPENING_CAPITAL" ||
+                    (tx.sourceAccountType == FinancialAccountType.EQUITY_OPENING_OR_ADJUSTMENT &&
+                        (tx.relatedEntityType == "OPENING_BALANCE" ||
+                            (tx.sourceAccountId == AccountingEngine.ACC_OWNER_EQUITY &&
+                                tx.destinationAccountType in listOf(FinancialAccountType.CASH_DRAWER, FinancialAccountType.WALLET) &&
+                                tx.relatedEntityType !in listOf("CAPITAL_INJECTION", "CAPITAL_WITHDRAWAL", "CASH_DRAWER", "WALLET")))) -> {
+                    openingCapital += tx.amountMinor
+                }
                 tx.relatedEntityType == "CAPITAL_INJECTION" ||
-                    (tx.sourceAccountId == AccountingEngine.ACC_OWNER_EQUITY && tx.destinationAccountType in listOf(FinancialAccountType.CASH_DRAWER, FinancialAccountType.WALLET)) -> {
+                    (tx.sourceAccountId == AccountingEngine.ACC_OWNER_EQUITY &&
+                        tx.destinationAccountType in listOf(FinancialAccountType.CASH_DRAWER, FinancialAccountType.WALLET) &&
+                        tx.relatedEntityType !in listOf("OPENING_CAPITAL", "OPENING_BALANCE", "CAPITAL_WITHDRAWAL", "CASH_DRAWER", "WALLET")) -> {
                     injections += tx.amountMinor
                 }
                 tx.relatedEntityType == "CAPITAL_WITHDRAWAL" ||
-                    (tx.destinationAccountId == AccountingEngine.ACC_OWNER_EQUITY && tx.sourceAccountType in listOf(FinancialAccountType.CASH_DRAWER, FinancialAccountType.WALLET)) -> {
+                    (tx.destinationAccountId == AccountingEngine.ACC_OWNER_EQUITY &&
+                        tx.sourceAccountType in listOf(FinancialAccountType.CASH_DRAWER, FinancialAccountType.WALLET) &&
+                        tx.relatedEntityType !in listOf("OPENING_CAPITAL", "OPENING_BALANCE", "CAPITAL_INJECTION", "CASH_DRAWER", "WALLET")) -> {
                     withdrawals += tx.amountMinor
-                }
-                tx.descriptionArabic.contains("رصيد افتتاحي") || tx.descriptionArabic.contains("رأس المال الافتتاحي") -> {
-                    openingCapital += tx.amountMinor
                 }
                 tx.transactionType == FinancialTransactionType.SALE -> {
                     revenue += tx.amountMinor
@@ -154,7 +199,14 @@ class CapitalManagementEngine(
         val netCapitalContributions = openingCapital + injections - withdrawals
         val currentTotalCapital = netCapitalContributions + netProfit
 
-        val cashDrawerBalance = ledgerDao.getDerivedAccountBalanceMinor(shopId, FinancialAccountType.CASH_DRAWER, "MAIN_DRAWER")
+        val cashDrawers = ledgerDao.getAllCashDrawers(shopId)
+        val cashDrawerBalance = if (cashDrawers.isNotEmpty()) {
+            cashDrawers.sumOf {
+                ledgerDao.getDerivedAccountBalanceMinor(shopId, FinancialAccountType.CASH_DRAWER, it.localId)
+            }
+        } else {
+            ledgerDao.getDerivedAccountBalanceMinor(shopId, FinancialAccountType.CASH_DRAWER, com.example.repository.MekkaPhoneRepository.DEFAULT_MAIN_DRAWER_ID)
+        }
         val wallets = ledgerDao.getAllWallets(shopId)
         val walletsTotalBalance = wallets.sumOf {
             ledgerDao.getDerivedAccountBalanceMinor(shopId, FinancialAccountType.WALLET, it.localId)

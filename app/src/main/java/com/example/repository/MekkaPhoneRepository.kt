@@ -247,6 +247,10 @@ class MekkaPhoneRepository(
         database = database,
         financialLedgerEngine = financialLedgerEngine
     )
+    val capitalManagementEngine = com.example.financial.CapitalManagementEngine(
+        database = database,
+        financialLedgerEngine = financialLedgerEngine
+    )
     val dataIntegrityChecker = DataIntegrityChecker(database)
     val smartCategorizationEngine = com.example.transaction.SmartCategorizationEngine(database)
     val businessLimitsManager = com.example.transaction.BusinessLimitsManager(database)
@@ -2528,16 +2532,18 @@ class MekkaPhoneRepository(
         operationType: WalletOperationType,
         customerPhone: String,
         principalAmountMinor: Long,
-        providerFeeMinor: Long,
-        shopCommissionMinor: Long,
+        providerFeeMinor: Long = 0L,
+        shopCommissionMinor: Long = 0L,
         targetWalletId: String? = null,
+        cashDrawerId: String = DEFAULT_MAIN_DRAWER_ID,
         notes: String = "",
         actorUserId: String = activeUserId,
         idempotencyKey: String? = null
     ) = financialLedgerEngine.executeAtomicWalletTransfer(
         shopId = DEFAULT_SHOP_ID,
         walletId = walletId,
-        cashDrawerId = targetWalletId ?: DEFAULT_MAIN_DRAWER_ID,
+        cashDrawerId = cashDrawerId,
+        targetWalletId = targetWalletId,
         transferKind = operationType.name,
         customerPhone = customerPhone,
         principalAmountMinor = principalAmountMinor,
@@ -2554,15 +2560,18 @@ class MekkaPhoneRepository(
         transferKind: String,
         customerPhone: String,
         principalAmountMinor: Long,
-        providerFeeMinor: Long,
-        shopCommissionMinor: Long,
+        providerFeeMinor: Long = 0L,
+        shopCommissionMinor: Long = 0L,
+        targetWalletId: String? = null,
+        cashDrawerId: String = DEFAULT_MAIN_DRAWER_ID,
         notes: String = "",
         actorUserId: String = activeUserId,
         idempotencyKey: String? = null
     ) = financialLedgerEngine.executeAtomicWalletTransfer(
         shopId = DEFAULT_SHOP_ID,
         walletId = walletId,
-        cashDrawerId = DEFAULT_MAIN_DRAWER_ID,
+        cashDrawerId = cashDrawerId,
+        targetWalletId = targetWalletId,
         transferKind = transferKind,
         customerPhone = customerPhone,
         principalAmountMinor = principalAmountMinor,
@@ -2605,6 +2614,57 @@ class MekkaPhoneRepository(
         deviceId = DEFAULT_DEVICE_ID,
         idempotencyKey = idempotencyKey
     )
+
+    suspend fun recordCapitalInjection(
+        amountMinor: Long,
+        destinationAccountType: FinancialAccountType = FinancialAccountType.CASH_DRAWER,
+        destinationAccountId: String = DEFAULT_MAIN_DRAWER_ID,
+        notes: String = "",
+        actorUserId: String = activeUserId
+    ) = capitalManagementEngine.recordCapitalInjection(
+        shopId = DEFAULT_SHOP_ID,
+        amountMinor = amountMinor,
+        destinationAccountType = destinationAccountType,
+        destinationAccountId = destinationAccountId,
+        notes = notes,
+        actorUserId = actorUserId,
+        deviceId = DEFAULT_DEVICE_ID
+    )
+
+    suspend fun recordCapitalWithdrawal(
+        amountMinor: Long,
+        sourceAccountType: FinancialAccountType = FinancialAccountType.CASH_DRAWER,
+        sourceAccountId: String = DEFAULT_MAIN_DRAWER_ID,
+        notes: String = "",
+        actorUserId: String = activeUserId
+    ) = capitalManagementEngine.recordCapitalWithdrawal(
+        shopId = DEFAULT_SHOP_ID,
+        amountMinor = amountMinor,
+        sourceAccountType = sourceAccountType,
+        sourceAccountId = sourceAccountId,
+        notes = notes,
+        actorUserId = actorUserId,
+        deviceId = DEFAULT_DEVICE_ID
+    )
+
+    suspend fun recordOpeningCapital(
+        amountMinor: Long,
+        destinationAccountType: FinancialAccountType = FinancialAccountType.CASH_DRAWER,
+        destinationAccountId: String = DEFAULT_MAIN_DRAWER_ID,
+        notes: String = "رأس مال افتتاحي",
+        actorUserId: String = activeUserId
+    ) = capitalManagementEngine.recordOpeningCapital(
+        shopId = DEFAULT_SHOP_ID,
+        amountMinor = amountMinor,
+        destinationAccountType = destinationAccountType,
+        destinationAccountId = destinationAccountId,
+        notes = notes,
+        actorUserId = actorUserId,
+        deviceId = DEFAULT_DEVICE_ID
+    )
+
+    suspend fun getCapitalStatement(shopId: String = DEFAULT_SHOP_ID) =
+        capitalManagementEngine.getCapitalStatement(shopId)
 
     suspend fun executeCashCloseout(
         countedCashMinor: Long,
@@ -2683,7 +2743,7 @@ class MekkaPhoneRepository(
         autoConfirmOnHighConfidenceMatch: Boolean = false,
         actorUserId: String = activeUserId
     ): AppResult<SmsPipelineOutcome> = smsIntelligenceEngine.ingestSmsEvidence(
-        shopId = DEFAULT_SHOP_ID,
+        shopId = activeShopId,
         senderAddress = senderAddress,
         rawMessageBody = rawMessageBody,
         deviceId = DEFAULT_DEVICE_ID,
@@ -2698,7 +2758,7 @@ class MekkaPhoneRepository(
         expectedFeeMinor: Long = 0L,
         counterpartyPhone: String = ""
     ) = smsIntelligenceEngine.registerExpectedOperation(
-        shopId = DEFAULT_SHOP_ID,
+        shopId = activeShopId,
         targetWalletId = targetWalletId,
         expectedType = expectedType,
         expectedAmountMinor = expectedAmountMinor,
@@ -2712,7 +2772,7 @@ class MekkaPhoneRepository(
         explicitWalletId: String? = null,
         actorUserId: String = activeUserId
     ) = smsIntelligenceEngine.confirmPendingSmsToLedger(
-        shopId = DEFAULT_SHOP_ID,
+        shopId = activeShopId,
         pendingId = pendingId,
         explicitWalletId = explicitWalletId,
         actorUserId = actorUserId,
@@ -2724,7 +2784,7 @@ class MekkaPhoneRepository(
         decisionStatus: String, // REJECTED or IGNORED
         actorUserId: String = activeUserId
     ) = smsIntelligenceEngine.updatePendingSmsReviewDecision(
-        shopId = DEFAULT_SHOP_ID,
+        shopId = activeShopId,
         pendingId = pendingId,
         decisionStatus = decisionStatus,
         actorUserId = actorUserId,
@@ -2736,7 +2796,7 @@ class MekkaPhoneRepository(
         isNetworkAvailable: Boolean = true,
         simulateTransientFailure: Boolean = false
     ): AppResult<SyncBatchExecutionReport> = syncCoordinator.executeDeltaSyncCycle(
-        expectedShopId = DEFAULT_SHOP_ID,
+        expectedShopId = activeShopId,
         isNetworkAvailable = isNetworkAvailable,
         simulateTransientFailure = simulateTransientFailure
     )
@@ -3027,6 +3087,12 @@ class MekkaPhoneRepository(
         val actor = (auth as AppResult.Success).data
 
         val ledgerDao = database.financialLedgerDao()
+        val openSession = ledgerDao.getOpenCashSession(shopId, drawerId)
+            ?: return AppResult.Error(
+                "لا توجد وردية مفتوحة حالياً لهذا الدرج ($drawerId) لإغلاقها",
+                "NO_OPEN_SHIFT"
+            )
+
         val expectedCash = ledgerDao.getDerivedAccountBalanceMinor(
             shopId = shopId,
             accountType = FinancialAccountType.CASH_DRAWER,

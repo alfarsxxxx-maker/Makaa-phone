@@ -57,12 +57,13 @@ class V4Part1MandatoryModularTests {
             repository.ensureFoundationInitialized()
             repository.authenticateUserPin(ownerId, "1111")
 
-            // Seed opening cash: 10,000 EGP = 1,000,000 minor
-            repository.executeCashOperation(
+            // Seed opening cash: 40,000 EGP = 4,000,000 minor (to fund drawer 10,000 EGP and wallets 30,000 EGP)
+            val openCashRes = repository.executeCashOperation(
                 operationType = FinancialTransactionType.CASH_IN,
-                amountMinor = 1_000_000L,
-                reasonArabic = "رصيد افتتاحي للخزينة"
+                amountMinor = 4_000_000L,
+                reasonArabic = "رصيد افتتاحي للخزينة والمحافظ"
             )
+            assertTrue("Cash opening must succeed", openCashRes is AppResult.Success)
 
             // Seed Vodafone Wallet
             database.financialLedgerDao().insertWallet(
@@ -80,7 +81,7 @@ class V4Part1MandatoryModularTests {
                 )
             )
             // Top up Vodafone wallet: 20,000 EGP from cash
-            repository.executeWalletOperation(
+            val vfTopupRes = repository.executeWalletOperation(
                 walletId = vodafoneWalletId,
                 operationType = WalletOperationType.CASH_TO_WALLET,
                 customerPhone = "01000000001",
@@ -88,13 +89,7 @@ class V4Part1MandatoryModularTests {
                 providerFeeMinor = 0L,
                 shopCommissionMinor = 0L
             )
-
-            // Restore cash drawer back to 10,000 EGP
-            repository.executeCashOperation(
-                operationType = FinancialTransactionType.CASH_IN,
-                amountMinor = 2_000_000L,
-                reasonArabic = "استعادة رصيد الخزينة 10,000 ج.م"
-            )
+            assertTrue("Vodafone wallet topup must succeed", vfTopupRes is AppResult.Success)
 
             // Seed Orange Wallet: 10,000 EGP from cash
             database.financialLedgerDao().insertWallet(
@@ -111,7 +106,7 @@ class V4Part1MandatoryModularTests {
                     updatedAt = System.currentTimeMillis()
                 )
             )
-            repository.executeWalletOperation(
+            val ogTopupRes = repository.executeWalletOperation(
                 walletId = orangeWalletId,
                 operationType = WalletOperationType.CASH_TO_WALLET,
                 customerPhone = "01200000001",
@@ -119,13 +114,7 @@ class V4Part1MandatoryModularTests {
                 providerFeeMinor = 0L,
                 shopCommissionMinor = 0L
             )
-
-            // Restore cash drawer back to 10,000 EGP
-            repository.executeCashOperation(
-                operationType = FinancialTransactionType.CASH_IN,
-                amountMinor = 1_000_000L,
-                reasonArabic = "استعادة رصيد الخزينة 10,000 ج.م"
-            )
+            assertTrue("Orange wallet topup must succeed", ogTopupRes is AppResult.Success)
         }
     }
 

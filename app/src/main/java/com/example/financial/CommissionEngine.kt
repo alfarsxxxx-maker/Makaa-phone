@@ -171,10 +171,31 @@ object CommissionEngine {
         )
     )
 
-    fun registerRule(rule: CommissionTierRule) {
+    fun validateRule(rule: CommissionTierRule): AppResult<Unit> {
+        if (rule.ruleId.isBlank()) {
+            return AppResult.Error("معرف قاعدة العمولة لا يمكن أن يكون فارغاً", "INVALID_RULE_ID")
+        }
+        if (rule.minAmountMinor < 0L || rule.maxAmountMinor < rule.minAmountMinor) {
+            return AppResult.Error("نطاق المبلغ غير صالح للقاعدة (${rule.ruleId})", "INVALID_RULE_AMOUNT_RANGE")
+        }
+        if (rule.customerFeePercentageBps < 0 || rule.customerFeeFixedMinor < 0L) {
+            return AppResult.Error("عمولة العميل لا يمكن أن تكون سالبة (${rule.ruleId})", "INVALID_COMMISSION_FEE")
+        }
+        if (rule.providerCostPercentageBps < 0 || rule.providerCostFixedMinor < 0L) {
+            return AppResult.Error("تكلفة مزود الخدمة لا يمكن أن تكون سالبة (${rule.ruleId})", "INVALID_PROVIDER_COST")
+        }
+        return AppResult.Success(Unit)
+    }
+
+    fun registerRule(rule: CommissionTierRule): AppResult<Unit> {
+        val validation = validateRule(rule)
+        if (validation is AppResult.Error) return validation
         defaultRules.removeAll { it.ruleId == rule.ruleId }
         defaultRules.add(0, rule)
+        return AppResult.Success(Unit)
     }
+
+    fun getAllRules(): List<CommissionTierRule> = defaultRules.toList()
 
     fun calculateProfitPreview(
         providerCode: String,
@@ -209,6 +230,27 @@ object CommissionEngine {
                 expectedShopProfitMinor = 0L,
                 netCustomerAmountMinor = 0L,
                 appliedRuleDescriptionArabic = "يرجى إدخال مبلغ صالح"
+            )
+        }
+
+        if (customCommissionMinorOverride != null && customCommissionMinorOverride < 0L) {
+            return CommissionProfitPreview(
+                principalAmountMinor = principalAmountMinor,
+                customerCommissionMinor = 0L,
+                providerCostFeeMinor = 0L,
+                expectedShopProfitMinor = 0L,
+                netCustomerAmountMinor = principalAmountMinor,
+                appliedRuleDescriptionArabic = "قيمة العمولة المحددة غير صالحة"
+            )
+        }
+        if (customCostFeeMinorOverride != null && customCostFeeMinorOverride < 0L) {
+            return CommissionProfitPreview(
+                principalAmountMinor = principalAmountMinor,
+                customerCommissionMinor = 0L,
+                providerCostFeeMinor = 0L,
+                expectedShopProfitMinor = 0L,
+                netCustomerAmountMinor = principalAmountMinor,
+                appliedRuleDescriptionArabic = "تكلفة الخدمة المحددة غير صالحة"
             )
         }
 

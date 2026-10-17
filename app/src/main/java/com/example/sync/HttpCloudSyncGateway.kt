@@ -106,16 +106,33 @@ class HttpCloudSyncGateway(
             val responseCode = connection.responseCode
             if (responseCode in 200..299) {
                 val responseBody = BufferedReader(InputStreamReader(connection.inputStream, "UTF-8")).use { it.readText() }
-                val json = JSONObject(responseBody)
-                val accepted = json.optBoolean("accepted", true)
+                val json = runCatching { JSONObject(responseBody) }.getOrNull()
+                if (json == null) {
+                    ObservabilityManager.recordEvent(
+                        category = DiagnosticCategory.SYNC_FAILURE,
+                        severity = DiagnosticSeverity.ERROR,
+                        summaryArabic = "استجابة الخادم غير صالحة أو ليست بصيغة JSON",
+                        technicalDetails = responseBody.take(200),
+                        shopId = request.shopId,
+                        deviceId = request.deviceId
+                    )
+                    return@withContext AppResult.Error(
+                        "استجابة الخادم غير صالحة أو ليست بصيغة JSON مقبولة",
+                        "INVALID_SERVER_RESPONSE"
+                    )
+                }
+
+                val accepted = json.optBoolean("accepted", false)
                 val alreadyApplied = json.optBoolean("alreadyAppliedIdempotent", false)
                 val remoteVersion = json.optLong("serverRemoteVersion", request.entityVersion)
                 val ackTimestamp = json.optLong("serverAckTimestamp", System.currentTimeMillis())
                 val cloudId = json.optString("remoteCloudId", "CLD-${request.entityLocalId}")
+                val ackOpId = json.optString("operationId", request.operationId)
+                val ackDedup = json.optString("deduplicationKey", request.deduplicationKey)
 
                 val ack = RemoteSyncAck(
-                    operationId = request.operationId,
-                    deduplicationKey = request.deduplicationKey,
+                    operationId = ackOpId,
+                    deduplicationKey = ackDedup,
                     accepted = accepted,
                     alreadyAppliedIdempotent = alreadyApplied,
                     serverRemoteVersion = remoteVersion,
@@ -142,6 +159,20 @@ class HttpCloudSyncGateway(
                     "CLOUD_HTTP_ERROR_$responseCode"
                 )
             }
+        } catch (e: java.net.SocketTimeoutException) {
+            ObservabilityManager.recordEvent(
+                category = DiagnosticCategory.SYNC_FAILURE,
+                severity = DiagnosticSeverity.WARNING,
+                summaryArabic = "انتهت مهلة الاتصال بخادم المزامنة (Timeout)",
+                technicalDetails = e.message.orEmpty(),
+                shopId = request.shopId,
+                deviceId = request.deviceId
+            )
+            AppResult.Error(
+                "انتهت مهلة الاتصال بخادم المزامنة (Request Timeout): ${e.message ?: "Timeout"}",
+                "CLOUD_TIMEOUT_ERROR",
+                e
+            )
         } catch (e: Exception) {
             ObservabilityManager.recordEvent(
                 category = DiagnosticCategory.SYNC_FAILURE,

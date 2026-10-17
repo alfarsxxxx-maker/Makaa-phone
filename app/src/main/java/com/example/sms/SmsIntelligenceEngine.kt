@@ -469,12 +469,56 @@ class SmsIntelligenceEngine(
             )
         }
 
-        // 2. Identify Provider & Parse
+        // 2. Deterministic Classification Gate (V4.1 Section 5)
+        // Non-financial messages (OTP, Promotional, Personal, Unknown, Unsupported) must NEVER enter the financial pipeline
+        val classification = SmsClassifier.classify(cleanSender, normalizedBody)
+        if (!classification.isFinancialCandidate) {
+            return try {
+                database.withTransaction {
+                    val smsEntity = SmsMessageEntity(
+                        localId = IdGenerator.newPrefixedId("SMS"),
+                        shopId = shopId,
+                        senderAddress = cleanSender,
+                        messageBody = normalizedBody,
+                        messageHashSha256 = messageHash,
+                        receivedTimestamp = receivedTimestamp,
+                        isProcessed = true,
+                        deviceId = deviceId,
+                        createdAt = receivedTimestamp,
+                        updatedAt = receivedTimestamp
+                    )
+                    opsDao.insertSmsMessage(smsEntity)
+
+                    AppResult.Success(
+                        SmsPipelineOutcome(
+                            smsEntity = smsEntity,
+                            parsingResult = null,
+                            pendingTransaction = null,
+                            confidenceLevel = SmsConfidenceLevel.LOW,
+                            matchedExistingPendingOperation = false,
+                            autoConfirmedTransaction = null,
+                            classification = classification,
+                            processingState = when (classification) {
+                                SmsClassification.OTP -> SmsProcessingState.IGNORED
+                                SmsClassification.PROMOTIONAL -> SmsProcessingState.IGNORED
+                                SmsClassification.PERSONAL -> SmsProcessingState.IGNORED
+                                SmsClassification.UNSUPPORTED -> SmsProcessingState.UNSUPPORTED
+                                else -> SmsProcessingState.IGNORED
+                            }
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                AppResult.Error("تعذر تسجيل الرسالة غير المالية: ${e.message}", "NON_FINANCIAL_SMS_ERROR", e)
+            }
+        }
+
+        // 3. Identify Provider & Parse
         val matchedParser = registeredParsers.firstOrNull { it.canParse(cleanSender, normalizedBody) }
         val candidate = matchedParser?.parse(cleanSender, normalizedBody, receivedTimestamp)
             ?.takeIf { matchedParser.validate(it) }
 
-        // 3. Secondary Duplicate Check by Provider + Reference (if reference is present)
+        // 4. Secondary Duplicate Check by Provider + Reference (if reference is present)
         if (candidate != null && candidate.referenceNumber.isNotBlank()) {
             val dupByRef = opsDao.getParsingResultByProviderAndReference(
                 shopId = shopId,
@@ -513,12 +557,15 @@ class SmsIntelligenceEngine(
                             parsingResult = null,
                             pendingTransaction = null,
                             confidenceLevel = SmsConfidenceLevel.LOW,
-                            matchedExistingPendingOperation = false
+                            matchedExistingPendingOperation = false,
+                            autoConfirmedTransaction = null,
+                            classification = classification,
+                            processingState = SmsProcessingState.FAILED
                         )
                     )
                 }
 
-                // 4. Match against expected pending operations within 60-minute window
+                // 5. Match against expected pending operations within 60-minute window
                 val unmatchedCandidates = opsDao.findUnmatchedExpectedPendingOperations(
                     shopId = shopId,
                     amountMinor = candidate.amountMinor
@@ -585,34 +632,11 @@ class SmsIntelligenceEngine(
                     created
                 }
 
-                // Requirement 35: Auto-confirm MUST satisfy all 10 safety gates, never just confidence >= 85%:
-                // 1. Known provider, 2. Valid template, 3. Valid amount, 4. Valid type, 5. Reference present,
-                // 6. Valid timestamp window, 7. Expected operation exact match, 8. Duplicate protection passed,
-                // 9. Correct shop/wallet ownership, 10. Risk limit evaluation (<= 50,000 EGP).
-                var autoTx: TransactionEntity? = null
-                val maxAutoConfirmRiskLimitMinor = 5_000_000L // 50,000.00 EGP
-                val allTenAutoConfirmGatesPassed = autoConfirmOnHighConfidenceMatch &&
-                    matchedPending != null &&
-                    matchedPending.shopId == shopId &&
-                    matchedPending.proposedAmountMinor == candidate.amountMinor &&
-                    candidate.amountMinor in 1L..maxAutoConfirmRiskLimitMinor &&
-                    candidate.referenceNumber.isNotBlank() &&
-                    confidenceLevel == SmsConfidenceLevel.HIGH &&
-                    pendingEntity.targetWalletId != null
-
-                if (allTenAutoConfirmGatesPassed && pendingEntity.targetWalletId != null) {
-                    val confirmRes = confirmPendingTransactionInternal(
-                        shopId = shopId,
-                        pendingId = pendingEntity.localId,
-                        targetWalletId = pendingEntity.targetWalletId,
-                        actorUserId = actorUserId,
-                        deviceId = deviceId,
-                        timestamp = receivedTimestamp
-                    )
-                    if (confirmRes is AppResult.Success) {
-                        autoTx = confirmRes.data
-                    }
-                }
+                // Strict SMS Financial Safety Gate (P0.4.1):
+                // SMS is evidence, NOT financial truth. Every financial transaction candidate extracted from SMS
+                // MUST remain in AWAITING_CONFIRMATION (pending review) and requires explicit human user confirmation
+                // via confirmPendingSmsToLedger(). No background ingestion or bypass may auto-post to the Immutable Financial Ledger.
+                val autoTx: TransactionEntity? = null
 
                 AppResult.Success(
                     SmsPipelineOutcome(
@@ -621,7 +645,9 @@ class SmsIntelligenceEngine(
                         pendingTransaction = pendingEntity,
                         confidenceLevel = confidenceLevel,
                         matchedExistingPendingOperation = matchedPending != null,
-                        autoConfirmedTransaction = autoTx
+                        autoConfirmedTransaction = autoTx,
+                        classification = classification,
+                        processingState = SmsProcessingState.PENDING_REVIEW
                     )
                 )
             }
