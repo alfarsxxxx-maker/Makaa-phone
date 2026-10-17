@@ -489,7 +489,7 @@ class V4Part1P042CloudSyncIntegrityTest {
         assertTrue(resolved.isResolved)
 
         // Verify audit log generated
-        val auditLogs = syncDao.getAuditLogsForEntity(primaryShopId, "TransactionEntity", "TX-SEC-01")
+        val auditLogs = syncDao.getAllAuditLogsChronological(primaryShopId).filter { it.entityType == "TransactionEntity" && it.entityId == "TX-SEC-01" }
         assertEquals(1, auditLogs.size)
         assertEquals("CONFLICT_RESOLUTION", auditLogs[0].actionType)
     }
@@ -698,7 +698,7 @@ class V4Part1P042CloudSyncIntegrityTest {
         assertEquals("Operation must transition to CONFLICT state", SyncState.CONFLICT, updatedOp?.syncState)
 
         // Verify SyncConflictEntity created
-        val conflicts = syncDao.getUnresolvedConflicts(primaryShopId)
+        val conflicts = syncDao.getAllSyncConflicts(primaryShopId)
         assertTrue("Must record unresolved conflict in database", conflicts.any { it.entityLocalId == "TX-409-TEST" })
     }
 }
